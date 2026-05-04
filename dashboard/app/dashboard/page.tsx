@@ -1,0 +1,75 @@
+import { listDevices } from "@/actions/devices";
+import {
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+
+import { DashboardPanels } from "./_components/dashboard-panels";
+import { DeviceSidebar } from "./_components/device-sidebar";
+
+type Search = Promise<{ device?: string }>;
+
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Search;
+}) {
+  const { device: deviceParam } = await searchParams;
+  const devicesRaw = await listDevices();
+  const devices = Array.isArray(devicesRaw) ? devicesRaw : [];
+
+  const selectedId =
+    deviceParam && devices.some((d) => d.id === deviceParam)
+      ? deviceParam
+      : devices[0]?.id;
+
+  const current = devices.find((d) => d.id === selectedId);
+
+  return (
+    <div className="mx-auto max-w-7xl space-y-8 p-4 pb-12 sm:p-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+          Dashboard
+        </h1>
+        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+          Choose a device to view live telemetry, RPM/speed trend, trip history,
+          and alerts. Data is loaded with Next.js server actions.
+        </p>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-[minmax(240px,280px)_1fr] lg:items-start">
+        <DeviceSidebar devices={devices} selectedId={selectedId} />
+        <div className="min-w-0 space-y-4">
+          {selectedId ? (
+            <>
+              {current ? (
+                <p className="text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">
+                    {current.name || current.device_code}
+                  </span>
+                  {current.id ? (
+                    <span className="ml-2 font-mono text-xs">
+                      {current.id}
+                    </span>
+                  ) : null}
+                </p>
+              ) : null}
+              <DashboardPanels deviceId={selectedId} />
+            </>
+          ) : (
+            <Card>
+              <CardHeader>
+                <CardTitle>No devices</CardTitle>
+                <CardDescription>
+                  Register at least one device via the API to use the dashboard.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

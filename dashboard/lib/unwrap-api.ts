@@ -11,7 +11,8 @@ type ApiCall<T> = Promise<{
 
 export async function unwrapApi<T>(call: ApiCall<T>): Promise<T> {
   const { data, error, response } = await call;
-  if (response.ok && data !== undefined) {
+  // Treat `null` like missing body (some stacks return JSON `null` with 200).
+  if (response.ok && data !== undefined && data !== null) {
     return data;
   }
 
