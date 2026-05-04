@@ -3,9 +3,9 @@
 //	@title			ESP32 OBD2 Cloud API
 //	@version		1.0
 //	@description	REST API for OBD2 devices, telemetry, trips, and alerts.
-//	@BasePath		/api
+//	@servers.url	/api
 //
-//go:generate go run github.com/swaggo/swag/cmd/swag@v1.16.4 init -g main.go -o ../docs -d .,../internal/handlers,../internal/models
+//go:generate go run github.com/swaggo/swag/v2/cmd/swag@v2.0.0-rc4 init --v3.1 -g main.go -o ../docs -d .,../internal/handlers,../internal/models
 package main
 
 import (
