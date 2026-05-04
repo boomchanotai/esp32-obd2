@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,11 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/esp32-obd2/cloud/internal/models"
-)
-
-const (
-	tripStartMovingMin = 30 * time.Second
-	tripEndStoppedMin  = 7 * time.Minute
 )
 
 var ErrUnknownDevice = errors.New("unknown device")
@@ -76,9 +73,6 @@ func (s *Store) IngestTelemetry(ctx context.Context, topicDevice string, p *mode
 		return err
 	}
 
-	if err := s.processTripFSM(ctx, tx, deviceID, recordedAt, p); err != nil {
-		return err
-	}
 	if err := s.processAlerts(ctx, tx, deviceID, telID, recordedAt, p); err != nil {
 		return err
 	}
@@ -86,132 +80,103 @@ func (s *Store) IngestTelemetry(ctx context.Context, topicDevice string, p *mode
 	return tx.Commit(ctx)
 }
 
-func moving(speed *float64, rpm *int) bool {
-	if rpm != nil && *rpm > 0 {
-		return true
+// finalizeTripInTx sets ended_at, duration, and speed aggregates for a trip row.
+func (s *Store) finalizeTripInTx(ctx context.Context, tx pgx.Tx, deviceID, tripID uuid.UUID, endedAt time.Time) error {
+	var startedAt time.Time
+	if err := tx.QueryRow(ctx, `SELECT started_at FROM trips WHERE id = $1 AND device_id = $2`, tripID, deviceID).Scan(&startedAt); err != nil {
+		return err
 	}
-	if speed != nil && *speed > 0 {
-		return true
+	var avgSpeed, maxSpeed float64
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(AVG(speed), 0)::float8, COALESCE(MAX(speed), 0)::float8
+		FROM telemetry
+		WHERE device_id = $1 AND recorded_at >= $2 AND recorded_at <= $3
+	`, deviceID, startedAt, endedAt).Scan(&avgSpeed, &maxSpeed); err != nil {
+		return err
 	}
-	return false
+	dur := int(endedAt.Sub(startedAt).Seconds())
+	_, err := tx.Exec(ctx, `
+		UPDATE trips SET
+			ended_at = $2,
+			duration_seconds = $3,
+			avg_speed = $4,
+			max_speed = $5,
+			updated_at = now()
+		WHERE id = $1
+	`, tripID, endedAt, dur, &avgSpeed, &maxSpeed)
+	return err
 }
 
-func (s *Store) processTripFSM(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID, ts time.Time, p *models.TelemetryPayload) error {
-	mv := moving(p.Speed, p.RPM)
+// IngestTripSession records trip boundaries from device MQTT messages (OBD session start/end).
+func (s *Store) IngestTripSession(ctx context.Context, topicDevice string, p *models.TripSessionPayload) error {
+	if p.DeviceID == "" || p.Timestamp == "" || p.Action == "" {
+		return errors.New("missing device_id, timestamp, or action")
+	}
+	if p.DeviceID != topicDevice {
+		return errors.New("device_id does not match MQTT topic")
+	}
 
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO trip_fsm (device_id, state, updated_at)
-		VALUES ($1, 'idle', now())
-		ON CONFLICT (device_id) DO NOTHING
-	`, deviceID); err != nil {
+	deviceID, err := s.DeviceIDByCode(ctx, topicDevice)
+	if err != nil {
 		return err
 	}
 
-	var state string
-	var movementSince, stopSince *time.Time
-	var openTripID *uuid.UUID
-
-	if err := tx.QueryRow(ctx, `
-		SELECT state, movement_since, stop_since, open_trip_id
-		FROM trip_fsm WHERE device_id = $1
-		FOR UPDATE
-	`, deviceID).Scan(&state, &movementSince, &stopSince, &openTripID); err != nil {
+	ts, err := time.Parse(time.RFC3339, p.Timestamp)
+	if err != nil {
 		return err
 	}
 
-	var err error
-	switch state {
-	case "idle":
-		if mv {
-			_, err = tx.Exec(ctx, `
-				UPDATE trip_fsm SET state = 'pending_start', movement_since = $2, stop_since = NULL, updated_at = now()
-				WHERE device_id = $1
-			`, deviceID, ts)
-			return err
-		}
-		return nil
+	action := strings.ToLower(strings.TrimSpace(p.Action))
+	if action != "start" && action != "end" {
+		return fmt.Errorf("invalid trip action %q (expected start or end)", p.Action)
+	}
 
-	case "pending_start":
-		if !mv {
-			_, err = tx.Exec(ctx, `
-				UPDATE trip_fsm SET state = 'idle', movement_since = NULL, stop_since = NULL, updated_at = now()
-				WHERE device_id = $1
-			`, deviceID)
-			return err
-		}
-		if movementSince != nil && ts.Sub(*movementSince) >= tripStartMovingMin {
-			var tripID uuid.UUID
-			err = tx.QueryRow(ctx, `
-				INSERT INTO trips (device_id, started_at) VALUES ($1, $2) RETURNING id
-			`, deviceID, ts).Scan(&tripID)
-			if err != nil {
-				return err
-			}
-			_, err = tx.Exec(ctx, `
-				UPDATE trip_fsm SET state = 'active', open_trip_id = $2, movement_since = NULL, stop_since = NULL, updated_at = now()
-				WHERE device_id = $1
-			`, deviceID, tripID)
-			return err
-		}
-		return nil
-
-	case "active":
-		if openTripID == nil {
-			_, err = tx.Exec(ctx, `UPDATE trip_fsm SET state = 'idle', updated_at = now() WHERE device_id = $1`, deviceID)
-			return err
-		}
-		tripID := *openTripID
-		if mv {
-			_, err = tx.Exec(ctx, `
-				UPDATE trip_fsm SET stop_since = NULL, updated_at = now() WHERE device_id = $1
-			`, deviceID)
-			return err
-		}
-		if stopSince == nil {
-			_, err = tx.Exec(ctx, `
-				UPDATE trip_fsm SET stop_since = $2, updated_at = now() WHERE device_id = $1
-			`, deviceID, ts)
-			return err
-		}
-		if ts.Sub(*stopSince) >= tripEndStoppedMin {
-			endedAt := ts
-			var startedAt time.Time
-			if err = tx.QueryRow(ctx, `SELECT started_at FROM trips WHERE id = $1`, tripID).Scan(&startedAt); err != nil {
-				return err
-			}
-			var avgSpeed, maxSpeed float64
-			if err = tx.QueryRow(ctx, `
-				SELECT COALESCE(AVG(speed), 0)::float8, COALESCE(MAX(speed), 0)::float8
-				FROM telemetry
-				WHERE device_id = $1 AND recorded_at >= $2 AND recorded_at <= $3
-			`, deviceID, startedAt, endedAt).Scan(&avgSpeed, &maxSpeed); err != nil {
-				return err
-			}
-			dur := int(endedAt.Sub(startedAt).Seconds())
-
-			_, err = tx.Exec(ctx, `
-				UPDATE trips SET
-					ended_at = $2,
-					duration_seconds = $3,
-					avg_speed = $4,
-					max_speed = $5,
-					updated_at = now()
-				WHERE id = $1
-			`, tripID, endedAt, dur, &avgSpeed, &maxSpeed)
-			if err != nil {
-				return err
-			}
-			_, err = tx.Exec(ctx, `
-				UPDATE trip_fsm SET state = 'idle', open_trip_id = NULL, movement_since = NULL, stop_since = NULL, updated_at = now()
-				WHERE device_id = $1
-			`, deviceID)
-			return err
-		}
-		return nil
-	default:
-		_, err = tx.Exec(ctx, `UPDATE trip_fsm SET state = 'idle', open_trip_id = NULL, movement_since = NULL, stop_since = NULL, updated_at = now() WHERE device_id = $1`, deviceID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
 		return err
 	}
+	defer tx.Rollback(ctx)
+
+	if action == "start" {
+		var openID uuid.UUID
+		err = tx.QueryRow(ctx, `
+			SELECT id FROM trips
+			WHERE device_id = $1 AND ended_at IS NULL
+			ORDER BY started_at DESC
+			LIMIT 1
+		`, deviceID).Scan(&openID)
+		if err == nil {
+			if err := s.finalizeTripInTx(ctx, tx, deviceID, openID, ts); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+
+		_, err = tx.Exec(ctx, `INSERT INTO trips (device_id, started_at) VALUES ($1, $2)`, deviceID, ts)
+		if err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+
+	var openID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM trips
+		WHERE device_id = $1 AND ended_at IS NULL
+		ORDER BY started_at DESC
+		LIMIT 1
+	`, deviceID).Scan(&openID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return tx.Commit(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.finalizeTripInTx(ctx, tx, deviceID, openID, ts); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func engineRunning(rpm *int, speed *float64) bool {

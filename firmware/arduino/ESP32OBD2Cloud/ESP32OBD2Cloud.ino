@@ -38,7 +38,10 @@ PubSubClient mqtt(wifi);
 char topic[64];
 bool s_time_ok = false;
 bool s_obd_connected = false;
+bool s_prev_obd_connected = false;
+uint8_t s_obd_fail_streak = 0;
 uint32_t s_last_obd_connect_try = 0;
+uint32_t s_last_obd_verify = 0;
 
 void ensureWifi() {
   if (WiFi.status() == WL_CONNECTED) return;
@@ -74,7 +77,29 @@ void reconnectMqtt() {
 
 void serviceObdConnection() {
   uint32_t now = millis();
-  if (s_obd_connected) return;
+  if (s_obd_connected) {
+    if (now - s_last_obd_verify < kObdConnectTryMs) return;
+    s_last_obd_verify = now;
+
+    // Link check only (not used for trip boundaries). Any live PID ⇒ bus OK.
+    float rpm = OBD2.pidRead(ENGINE_RPM);
+    float speed = OBD2.pidRead(VEHICLE_SPEED);
+    float vbat = OBD2.pidRead(CONTROL_MODULE_VOLTAGE);
+    bool any = !isnan(rpm) || !isnan(speed) || !isnan(vbat);
+    if (!any) {
+      if (++s_obd_fail_streak >= 6) {
+        s_obd_fail_streak = 0;
+        s_obd_connected = false;
+        OBD2.end();
+        Serial.println("OBD2 session lost (no PID responses)");
+      }
+    } else {
+      s_obd_fail_streak = 0;
+    }
+    return;
+  }
+
+  s_obd_fail_streak = 0;
   if (now - s_last_obd_connect_try < kObdConnectTryMs) return;
   s_last_obd_connect_try = now;
 
@@ -82,12 +107,42 @@ void serviceObdConnection() {
   int err = OBD2.begin();
   if (err == 1) {
     s_obd_connected = true;
+    s_last_obd_verify = millis();
     Serial.println("OBD2 connected");
   } else {
     s_obd_connected = false;
     OBD2.end();
     Serial.printf("OBD2 not connected (begin=%d)\n", err);
   }
+}
+
+void tripEventTimestamp(char* ts, size_t cap) {
+  struct tm tinfo;
+  if (s_time_ok && getLocalTime(&tinfo, 0)) {
+    strftime(ts, cap, "%Y-%m-%dT%H:%M:%SZ", &tinfo);
+  } else {
+    snprintf(ts, cap, "1970-01-01T00:00:00Z");
+  }
+}
+
+bool publishTripSession(const char* action) {
+  if (!mqtt.connected()) return false;
+  char ts[40];
+  tripEventTimestamp(ts, sizeof(ts));
+  char tripTopic[64];
+  snprintf(tripTopic, sizeof(tripTopic), "obd2/%s/trip", DEVICE_CODE);
+  JsonDocument doc;
+  doc["device_id"] = DEVICE_CODE;
+  doc["timestamp"] = ts;
+  doc["action"] = action;
+  char buf[192];
+  size_t n = serializeJson(doc, buf, sizeof(buf));
+  if (mqtt.publish(tripTopic, (const uint8_t*)buf, n, false)) {
+    Serial.printf("Trip %s -> %s\n", action, tripTopic);
+    return true;
+  }
+  Serial.println("MQTT trip publish failed");
+  return false;
 }
 
 void fillTelemetryJson(JsonDocument& doc) {
@@ -142,6 +197,15 @@ void loop() {
   mqtt.loop();
 
   serviceObdConnection();
+
+  bool obd = s_obd_connected;
+  if (obd && !s_prev_obd_connected) {
+    if (publishTripSession("start")) s_prev_obd_connected = true;
+  } else if (!obd && s_prev_obd_connected) {
+    if (publishTripSession("end")) s_prev_obd_connected = false;
+  } else {
+    s_prev_obd_connected = obd;
+  }
 
   static uint32_t lastPublish = 0;
   uint32_t now = millis();

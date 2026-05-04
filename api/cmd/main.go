@@ -65,7 +65,7 @@ func main() {
 				log.Printf("mqtt subscribe: %v", err)
 				return
 			}
-			log.Println("mqtt subscribed obd2/+/telemetry")
+			log.Println("mqtt subscribed obd2/+/telemetry, obd2/+/trip")
 		})
 
 	mqttClient := mqtt.NewClient(mqttOpts)

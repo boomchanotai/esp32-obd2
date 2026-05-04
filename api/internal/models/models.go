@@ -2,6 +2,14 @@ package models
 
 import "time"
 
+// TripSessionPayload is published by the device on MQTT topic obd2/{device_code}/trip
+// when the OBD-II session begins or ends (ECU reachable vs lost).
+type TripSessionPayload struct {
+	DeviceID  string `json:"device_id"`
+	Timestamp string `json:"timestamp"`
+	Action    string `json:"action"` // "start" or "end"
+}
+
 type TelemetryPayload struct {
 	DeviceID       string   `json:"device_id"`
 	Timestamp      string   `json:"timestamp"`
