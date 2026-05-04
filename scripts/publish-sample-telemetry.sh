@@ -4,8 +4,7 @@
 # Env: MQTT_HOST, MQTT_USER, MQTT_PASS, DEVICE_ID, INTERVAL_SEC, MAX_PUBLISH,
 #      RPM_MIN/MAX, SPEED_MIN/MAX, COOLANT_MIN/MAX, THROTTLE_MIN/MAX,
 #      LOAD_MIN/MAX, BATTERY_MIN/MAX
-# COMMAND:
-# ./scripts/publish-sample-telemetry.sh INTERVAL_SEC=0.5 ./scripts/publish-sample-telemetry.sh MAX_PUBLISH=20 INTERVAL_SEC=1 ./scripts/publish-sample-telemetry.sh DEVICE_ID=obd-test-002 RPM_MAX=3000 ./scripts/publish-sample-telemetry.sh 'obd2/obd-test-002/telemetry'
+# COMMAND: `MQTT_HOST=127.0.0.1 ./scripts/publish-sample-telemetry.sh`
 set -e
 
 HOST="${MQTT_HOST:-host.docker.internal}"
