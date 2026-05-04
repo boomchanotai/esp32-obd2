@@ -1,0 +1,451 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/esp32-obd2/cloud/internal/models"
+)
+
+const (
+	tripStartMovingMin = 30 * time.Second
+	tripEndStoppedMin  = 7 * time.Minute
+)
+
+var ErrUnknownDevice = errors.New("unknown device")
+
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+func New(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool}
+}
+
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
+func (s *Store) DeviceIDByCode(ctx context.Context, code string) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT id FROM devices WHERE device_code = $1`, code).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrUnknownDevice
+	}
+	return id, err
+}
+
+func (s *Store) IngestTelemetry(ctx context.Context, topicDevice string, p *models.TelemetryPayload, raw []byte) error {
+	if p.DeviceID == "" || p.Timestamp == "" {
+		return errors.New("missing device_id or timestamp")
+	}
+	if p.DeviceID != topicDevice {
+		return errors.New("device_id does not match MQTT topic")
+	}
+
+	deviceID, err := s.DeviceIDByCode(ctx, topicDevice)
+	if err != nil {
+		return err
+	}
+
+	recordedAt, err := time.Parse(time.RFC3339, p.Timestamp)
+	if err != nil {
+		return err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var telID int64
+	err = tx.QueryRow(ctx, `
+		INSERT INTO telemetry (
+			device_id, recorded_at, rpm, speed, coolant_temp, throttle, engine_load,
+			battery_voltage, mil_status, dtc_count, latitude, longitude, raw
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		RETURNING id
+	`, deviceID, recordedAt, p.RPM, p.Speed, p.CoolantTemp, p.Throttle, p.EngineLoad,
+		p.BatteryVoltage, p.MILStatus, p.DTCCount, p.Latitude, p.Longitude, raw,
+	).Scan(&telID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.processTripFSM(ctx, tx, deviceID, recordedAt, p); err != nil {
+		return err
+	}
+	if err := s.processAlerts(ctx, tx, deviceID, telID, recordedAt, p); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func moving(speed *float64, rpm *int) bool {
+	if rpm != nil && *rpm > 0 {
+		return true
+	}
+	if speed != nil && *speed > 0 {
+		return true
+	}
+	return false
+}
+
+func (s *Store) processTripFSM(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID, ts time.Time, p *models.TelemetryPayload) error {
+	mv := moving(p.Speed, p.RPM)
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO trip_fsm (device_id, state, updated_at)
+		VALUES ($1, 'idle', now())
+		ON CONFLICT (device_id) DO NOTHING
+	`, deviceID); err != nil {
+		return err
+	}
+
+	var state string
+	var movementSince, stopSince *time.Time
+	var openTripID *uuid.UUID
+
+	if err := tx.QueryRow(ctx, `
+		SELECT state, movement_since, stop_since, open_trip_id
+		FROM trip_fsm WHERE device_id = $1
+		FOR UPDATE
+	`, deviceID).Scan(&state, &movementSince, &stopSince, &openTripID); err != nil {
+		return err
+	}
+
+	var err error
+	switch state {
+	case "idle":
+		if mv {
+			_, err = tx.Exec(ctx, `
+				UPDATE trip_fsm SET state = 'pending_start', movement_since = $2, stop_since = NULL, updated_at = now()
+				WHERE device_id = $1
+			`, deviceID, ts)
+			return err
+		}
+		return nil
+
+	case "pending_start":
+		if !mv {
+			_, err = tx.Exec(ctx, `
+				UPDATE trip_fsm SET state = 'idle', movement_since = NULL, stop_since = NULL, updated_at = now()
+				WHERE device_id = $1
+			`, deviceID)
+			return err
+		}
+		if movementSince != nil && ts.Sub(*movementSince) >= tripStartMovingMin {
+			var tripID uuid.UUID
+			err = tx.QueryRow(ctx, `
+				INSERT INTO trips (device_id, started_at) VALUES ($1, $2) RETURNING id
+			`, deviceID, ts).Scan(&tripID)
+			if err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `
+				UPDATE trip_fsm SET state = 'active', open_trip_id = $2, movement_since = NULL, stop_since = NULL, updated_at = now()
+				WHERE device_id = $1
+			`, deviceID, tripID)
+			return err
+		}
+		return nil
+
+	case "active":
+		if openTripID == nil {
+			_, err = tx.Exec(ctx, `UPDATE trip_fsm SET state = 'idle', updated_at = now() WHERE device_id = $1`, deviceID)
+			return err
+		}
+		tripID := *openTripID
+		if mv {
+			_, err = tx.Exec(ctx, `
+				UPDATE trip_fsm SET stop_since = NULL, updated_at = now() WHERE device_id = $1
+			`, deviceID)
+			return err
+		}
+		if stopSince == nil {
+			_, err = tx.Exec(ctx, `
+				UPDATE trip_fsm SET stop_since = $2, updated_at = now() WHERE device_id = $1
+			`, deviceID, ts)
+			return err
+		}
+		if ts.Sub(*stopSince) >= tripEndStoppedMin {
+			endedAt := ts
+			var startedAt time.Time
+			if err = tx.QueryRow(ctx, `SELECT started_at FROM trips WHERE id = $1`, tripID).Scan(&startedAt); err != nil {
+				return err
+			}
+			var avgSpeed, maxSpeed float64
+			if err = tx.QueryRow(ctx, `
+				SELECT COALESCE(AVG(speed), 0)::float8, COALESCE(MAX(speed), 0)::float8
+				FROM telemetry
+				WHERE device_id = $1 AND recorded_at >= $2 AND recorded_at <= $3
+			`, deviceID, startedAt, endedAt).Scan(&avgSpeed, &maxSpeed); err != nil {
+				return err
+			}
+			dur := int(endedAt.Sub(startedAt).Seconds())
+
+			_, err = tx.Exec(ctx, `
+				UPDATE trips SET
+					ended_at = $2,
+					duration_seconds = $3,
+					avg_speed = $4,
+					max_speed = $5,
+					updated_at = now()
+				WHERE id = $1
+			`, tripID, endedAt, dur, &avgSpeed, &maxSpeed)
+			if err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `
+				UPDATE trip_fsm SET state = 'idle', open_trip_id = NULL, movement_since = NULL, stop_since = NULL, updated_at = now()
+				WHERE device_id = $1
+			`, deviceID)
+			return err
+		}
+		return nil
+	default:
+		_, err = tx.Exec(ctx, `UPDATE trip_fsm SET state = 'idle', open_trip_id = NULL, movement_since = NULL, stop_since = NULL, updated_at = now() WHERE device_id = $1`, deviceID)
+		return err
+	}
+}
+
+func engineRunning(rpm *int, speed *float64) bool {
+	if rpm != nil && *rpm > 400 {
+		return true
+	}
+	if speed != nil && *speed > 1 {
+		return true
+	}
+	return false
+}
+
+func (s *Store) processAlerts(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID, telID int64, _ time.Time, p *models.TelemetryPayload) error {
+	const sev = "HIGH"
+
+	if p.CoolantTemp != nil && *p.CoolantTemp >= 100 {
+		if err := s.raiseAlert(ctx, tx, deviceID, telID, "ENGINE_OVERHEAT", sev, "Coolant temperature high", p.CoolantTemp, ptrF(100)); err != nil {
+			return err
+		}
+	} else {
+		_ = s.resolveAlertType(ctx, tx, deviceID, "ENGINE_OVERHEAT")
+	}
+
+	if p.BatteryVoltage != nil {
+		run := engineRunning(p.RPM, p.Speed)
+		th := 12.0
+		if run {
+			th = 13.0
+		}
+		low := false
+		if run && *p.BatteryVoltage < 13 {
+			low = true
+		}
+		if !run && *p.BatteryVoltage < 12 {
+			low = true
+		}
+		if low {
+			if err := s.raiseAlert(ctx, tx, deviceID, telID, "LOW_BATTERY", sev, "Battery voltage low", p.BatteryVoltage, &th); err != nil {
+				return err
+			}
+		} else {
+			_ = s.resolveAlertType(ctx, tx, deviceID, "LOW_BATTERY")
+		}
+	}
+
+	mil := p.MILStatus != nil && *p.MILStatus
+	dtc := p.DTCCount != nil && *p.DTCCount > 0
+	if mil || dtc {
+		if err := s.raiseAlert(ctx, tx, deviceID, telID, "CHECK_ENGINE_ON", sev, "MIL on or DTCs present", nil, nil); err != nil {
+			return err
+		}
+	} else {
+		_ = s.resolveAlertType(ctx, tx, deviceID, "CHECK_ENGINE_ON")
+	}
+
+	if p.RPM != nil && *p.RPM > 4000 {
+		th := 4000.0
+		v := float64(*p.RPM)
+		if err := s.raiseAlert(ctx, tx, deviceID, telID, "HIGH_RPM", sev, "Engine RPM high", &v, &th); err != nil {
+			return err
+		}
+	} else {
+		_ = s.resolveAlertType(ctx, tx, deviceID, "HIGH_RPM")
+	}
+
+	return nil
+}
+
+func ptrF(f float64) *float64 { return &f }
+
+func (s *Store) raiseAlert(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID, telID int64, alertType, severity, msg string, value, threshold *float64) error {
+	var exists bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM alerts WHERE device_id = $1 AND alert_type = $2 AND resolved_at IS NULL
+		)
+	`, deviceID, alertType).Scan(&exists)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO alerts (device_id, telemetry_id, alert_type, severity, message, value, threshold)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+	`, deviceID, telID, alertType, severity, msg, value, threshold)
+	return err
+}
+
+func (s *Store) resolveAlertType(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID, alertType string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE alerts SET resolved_at = now() WHERE device_id = $1 AND alert_type = $2 AND resolved_at IS NULL
+	`, deviceID, alertType)
+	return err
+}
+
+func (s *Store) ListDevices(ctx context.Context) ([]models.Device, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, device_code, name, vehicle_name, vehicle_plate, created_at, updated_at
+		FROM devices ORDER BY device_code
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Device
+	for rows.Next() {
+		var id uuid.UUID
+		var d models.Device
+		if err := rows.Scan(&id, &d.DeviceCode, &d.Name, &d.VehicleName, &d.VehiclePlate, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, err
+		}
+		d.ID = id.String()
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetDevice(ctx context.Context, id uuid.UUID) (*models.Device, error) {
+	var rowID uuid.UUID
+	var d models.Device
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, device_code, name, vehicle_name, vehicle_plate, created_at, updated_at
+		FROM devices WHERE id = $1
+	`, id).Scan(&rowID, &d.DeviceCode, &d.Name, &d.VehicleName, &d.VehiclePlate, &d.CreatedAt, &d.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	d.ID = rowID.String()
+	return &d, nil
+}
+
+func (s *Store) CreateDevice(ctx context.Context, code, name, vname, vplate *string) (*models.Device, error) {
+	if code == nil || *code == "" {
+		return nil, errors.New("device_code required")
+	}
+	var rowID uuid.UUID
+	var d models.Device
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO devices (device_code, name, vehicle_name, vehicle_plate)
+		VALUES ($1,$2,$3,$4)
+		RETURNING id, device_code, name, vehicle_name, vehicle_plate, created_at, updated_at
+	`, *code, name, vname, vplate).Scan(&rowID, &d.DeviceCode, &d.Name, &d.VehicleName, &d.VehiclePlate, &d.CreatedAt, &d.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	d.ID = rowID.String()
+	return &d, nil
+}
+
+func (s *Store) ListTelemetry(ctx context.Context, deviceID uuid.UUID, limit int) ([]models.TelemetryRow, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, recorded_at, rpm, speed, coolant_temp, throttle, engine_load,
+		       battery_voltage, mil_status, dtc_count, latitude, longitude
+		FROM telemetry WHERE device_id = $1 ORDER BY recorded_at DESC LIMIT $2
+	`, deviceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.TelemetryRow
+	for rows.Next() {
+		var t models.TelemetryRow
+		if err := rows.Scan(&t.ID, &t.RecordedAt, &t.RPM, &t.Speed, &t.CoolantTemp, &t.Throttle, &t.EngineLoad,
+			&t.BatteryVoltage, &t.MILStatus, &t.DTCCount, &t.Latitude, &t.Longitude); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) LatestTelemetry(ctx context.Context, deviceID uuid.UUID) (*models.TelemetryRow, error) {
+	rows, err := s.ListTelemetry(ctx, deviceID, 1)
+	if err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	return &rows[0], nil
+}
+
+func (s *Store) ListTrips(ctx context.Context, deviceID uuid.UUID, limit int) ([]models.Trip, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, started_at, ended_at, duration_seconds, avg_speed, max_speed
+		FROM trips WHERE device_id = $1 ORDER BY started_at DESC LIMIT $2
+	`, deviceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Trip
+	for rows.Next() {
+		var tid uuid.UUID
+		var t models.Trip
+		if err := rows.Scan(&tid, &t.StartedAt, &t.EndedAt, &t.DurationSeconds, &t.AvgSpeed, &t.MaxSpeed); err != nil {
+			return nil, err
+		}
+		t.ID = tid.String()
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListAlerts(ctx context.Context, deviceID uuid.UUID, limit int) ([]models.Alert, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, alert_type, severity, message, value, threshold, occurred_at, resolved_at
+		FROM alerts WHERE device_id = $1 ORDER BY occurred_at DESC LIMIT $2
+	`, deviceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Alert
+	for rows.Next() {
+		var aid uuid.UUID
+		var a models.Alert
+		if err := rows.Scan(&aid, &a.AlertType, &a.Severity, &a.Message, &a.Value, &a.Threshold, &a.OccurredAt, &a.ResolvedAt); err != nil {
+			return nil, err
+		}
+		a.ID = aid.String()
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+

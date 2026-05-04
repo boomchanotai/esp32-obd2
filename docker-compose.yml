@@ -1,0 +1,53 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "8883:8883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: esp32-obd2
+      POSTGRES_USER: esp32-obd2
+      POSTGRES_PASSWORD: password
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+
+  # api:
+  #   build: ./api
+  #   container_name: obd-api
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     DATABASE_URL: postgres://esp32-obd2:password@postgres:5432/esp32-obd2?sslmode=disable
+  #     MQTT_BROKER_URL: tcp://mosquitto:1883
+  #     MQTT_USERNAME: esp32_device
+  #     MQTT_PASSWORD: obd_dev_mqtt
+  #     HTTP_ADDR: :8080
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     mosquitto:
+  #       condition: service_started
+
+  # dashboard:
+  #   build:
+  #     context: ./dashboard
+  #     dockerfile: Dockerfile
+  #     args:
+  #       API_BASE_URL: http://api:8080
+  #   container_name: obd-dashboard
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     API_BASE_URL: http://api:8080
+  #   depends_on:
+  #     - api

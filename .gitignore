@@ -1,0 +1,12 @@
+postgres-data/
+mosquitto/data/
+mosquitto/log/
+mosquitto/config/passwords
+*.log
+.DS_Store
+api/bin/
+firmware/.pio/
+
+.env
+.env.*
+!.env.example
