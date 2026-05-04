@@ -6,6 +6,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
+import { DashboardLiveRefresh } from "./_components/dashboard-live-refresh";
 import { DashboardPanels } from "./_components/dashboard-panels";
 import { DeviceSidebar } from "./_components/device-sidebar";
 
@@ -35,7 +36,7 @@ export default async function DashboardPage({
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
           Choose a device to view live telemetry, RPM/speed trend, trip history,
-          and alerts. Data is loaded with Next.js server actions.
+          and alerts. Panels refresh every few seconds while you stay on this page.
         </p>
       </div>
 
@@ -56,6 +57,7 @@ export default async function DashboardPage({
                   ) : null}
                 </p>
               ) : null}
+              <DashboardLiveRefresh />
               <DashboardPanels deviceId={selectedId} />
             </>
           ) : (

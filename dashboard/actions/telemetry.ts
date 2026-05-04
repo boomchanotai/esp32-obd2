@@ -12,6 +12,7 @@ export async function getLatestTelemetry(
   return unwrapApi(
     client.GET("/devices/{id}/latest", {
       params: { path: { id: deviceId } },
+      cache: "no-store",
     }),
   );
 }
@@ -26,6 +27,7 @@ export async function listTelemetry(
         path: { id: deviceId },
         query: limit != null ? { limit } : undefined,
       },
+      cache: "no-store",
     }),
   );
 }

@@ -16,6 +16,7 @@ export async function listDeviceTrips(
         path: { id: deviceId },
         query: limit != null ? { limit } : undefined,
       },
+      cache: "no-store",
     }),
   );
 }
