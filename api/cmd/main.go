@@ -1,3 +1,11 @@
+// Package main runs the HTTP API and MQTT worker.
+//
+//	@title			ESP32 OBD2 Cloud API
+//	@version		1.0
+//	@description	REST API for OBD2 devices, telemetry, trips, and alerts.
+//	@BasePath		/api
+//
+//go:generate go run github.com/swaggo/swag/cmd/swag@v1.16.4 init -g main.go -o ../docs -d .,../internal/handlers,../internal/models
 package main
 
 import (
@@ -13,6 +21,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
+	httpSwagger "github.com/swaggo/http-swagger"
+
+	_ "github.com/esp32-obd2/cloud/docs"
 
 	"github.com/esp32-obd2/cloud/internal/config"
 	"github.com/esp32-obd2/cloud/internal/handlers"
@@ -67,6 +78,7 @@ func main() {
 
 	h := handlers.New(st)
 	r.Mount("/api", h.Routes())
+	r.Get("/swagger/*", httpSwagger.WrapHandler)
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: r}
 

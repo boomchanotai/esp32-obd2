@@ -31,6 +31,15 @@ func (h *Handlers) Routes() chi.Router {
 	return r
 }
 
+// listDevices returns all devices.
+//
+//	@Summary		List devices
+//	@Description	Returns all registered OBD2 devices ordered by device code.
+//	@Tags			devices
+//	@Produce		json
+//	@Success		200	{array}	models.Device
+//	@Failure		500	{string}	string	"error message"
+//	@Router			/devices [get]
 func (h *Handlers) listDevices(w http.ResponseWriter, r *http.Request) {
 	devs, err := h.store.ListDevices(r.Context())
 	if err != nil {
@@ -40,15 +49,27 @@ func (h *Handlers) listDevices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, devs)
 }
 
-type createDeviceBody struct {
-	DeviceCode   string  `json:"device_code"`
+// CreateDeviceBody is the JSON body for registering a device.
+type CreateDeviceBody struct {
+	DeviceCode   string  `json:"device_code" example:"esp32-001"`
 	Name         *string `json:"name"`
 	VehicleName  *string `json:"vehicle_name"`
 	VehiclePlate *string `json:"vehicle_plate"`
 }
 
+// createDevice registers a new device.
+//
+//	@Summary		Create device
+//	@Description	Creates a device row; device_code must be unique and match MQTT topic segments.
+//	@Tags			devices
+//	@Accept			json
+//	@Produce		json
+//	@Param			body	body		CreateDeviceBody	true	"Device payload"
+//	@Success		201		{object}	models.Device
+//	@Failure		400		{string}	string	"invalid json or validation error"
+//	@Router			/devices [post]
 func (h *Handlers) createDevice(w http.ResponseWriter, r *http.Request) {
-	var body createDeviceBody
+	var body CreateDeviceBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
@@ -67,6 +88,18 @@ func parseDeviceID(p string) (uuid.UUID, error) {
 	return uuid.Parse(p)
 }
 
+// getDevice returns one device by UUID.
+//
+//	@Summary		Get device
+//	@Description	Returns device metadata for the given id.
+//	@Tags			devices
+//	@Produce		json
+//	@Param			id	path		string	true	"Device UUID"
+//	@Success		200	{object}	models.Device
+//	@Failure		400	{string}	string	"invalid id"
+//	@Failure		404	{string}	string	"not found"
+//	@Failure		500	{string}	string	"error message"
+//	@Router			/devices/{id} [get]
 func (h *Handlers) getDevice(w http.ResponseWriter, r *http.Request) {
 	id, err := parseDeviceID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -85,6 +118,19 @@ func (h *Handlers) getDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, d)
 }
 
+// listTelemetry returns recent telemetry rows for a device (newest first).
+//
+//	@Summary		List telemetry
+//	@Description	Returns up to `limit` rows (default 100, max 500).
+//	@Tags			telemetry
+//	@Produce		json
+//	@Param			id		path		string	true	"Device UUID"
+//	@Param			limit	query		int		false	"Max rows (default 100, max 500)"
+//	@Success		200		{array}		models.TelemetryRow
+//	@Failure		400		{string}	string	"invalid id"
+//	@Failure		404		{string}	string	"device not found"
+//	@Failure		500		{string}	string	"error message"
+//	@Router			/devices/{id}/telemetry [get]
 func (h *Handlers) listTelemetry(w http.ResponseWriter, r *http.Request) {
 	id, err := parseDeviceID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -107,6 +153,18 @@ func (h *Handlers) listTelemetry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, rows)
 }
 
+// latestTelemetry returns the most recent telemetry sample.
+//
+//	@Summary		Latest telemetry
+//	@Description	Returns the newest telemetry row for the device.
+//	@Tags			telemetry
+//	@Produce		json
+//	@Param			id	path		string	true	"Device UUID"
+//	@Success		200	{object}	models.TelemetryRow
+//	@Failure		400	{string}	string	"invalid id"
+//	@Failure		404	{string}	string	"device or telemetry not found"
+//	@Failure		500	{string}	string	"error message"
+//	@Router			/devices/{id}/latest [get]
 func (h *Handlers) latestTelemetry(w http.ResponseWriter, r *http.Request) {
 	id, err := parseDeviceID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -129,6 +187,19 @@ func (h *Handlers) latestTelemetry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, row)
 }
 
+// listTrips returns recent trips for a device.
+//
+//	@Summary		List trips
+//	@Description	Returns up to `limit` trips (default 50, max 200), newest first.
+//	@Tags			trips
+//	@Produce		json
+//	@Param			id		path		string	true	"Device UUID"
+//	@Param			limit	query		int		false	"Max rows (default 50, max 200)"
+//	@Success		200		{array}		models.Trip
+//	@Failure		400		{string}	string	"invalid id"
+//	@Failure		404		{string}	string	"device not found"
+//	@Failure		500		{string}	string	"error message"
+//	@Router			/devices/{id}/trips [get]
 func (h *Handlers) listTrips(w http.ResponseWriter, r *http.Request) {
 	id, err := parseDeviceID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -148,6 +219,19 @@ func (h *Handlers) listTrips(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, rows)
 }
 
+// listAlerts returns recent alerts for a device.
+//
+//	@Summary		List alerts
+//	@Description	Returns up to `limit` alerts (default 50, max 200), newest first.
+//	@Tags			alerts
+//	@Produce		json
+//	@Param			id		path		string	true	"Device UUID"
+//	@Param			limit	query		int		false	"Max rows (default 50, max 200)"
+//	@Success		200		{array}		models.Alert
+//	@Failure		400		{string}	string	"invalid id"
+//	@Failure		404		{string}	string	"device not found"
+//	@Failure		500		{string}	string	"error message"
+//	@Router			/devices/{id}/alerts [get]
 func (h *Handlers) listAlerts(w http.ResponseWriter, r *http.Request) {
 	id, err := parseDeviceID(chi.URLParam(r, "id"))
 	if err != nil {
