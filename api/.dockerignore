@@ -1,2 +1,6 @@
 bin
 *.md
+.git
+.env
+.env.*
+!.env.example

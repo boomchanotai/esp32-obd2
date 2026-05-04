@@ -3,51 +3,68 @@ services:
     image: eclipse-mosquitto:2
     ports:
       - "1883:1883"
-      - "8883:8883"
     volumes:
-      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/config:/mosquitto/config:ro
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mosquitto_sub -h localhost -u esp32_device -P obd_dev_mqtt -t '$$SYS/broker/uptime' -C 1 -W 3 || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
     environment:
       POSTGRES_DB: esp32-obd2
       POSTGRES_USER: esp32-obd2
       POSTGRES_PASSWORD: password
     volumes:
-      - ./postgres-data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
-  # api:
-  #   build: ./api
-  #   container_name: obd-api
-  #   ports:
-  #     - "8080:8080"
-  #   environment:
-  #     DATABASE_URL: postgres://esp32-obd2:password@postgres:5432/esp32-obd2?sslmode=disable
-  #     MQTT_BROKER_URL: tcp://mosquitto:1883
-  #     MQTT_USERNAME: esp32_device
-  #     MQTT_PASSWORD: obd_dev_mqtt
-  #     HTTP_ADDR: :8080
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     mosquitto:
-  #       condition: service_started
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://esp32-obd2:password@postgres:5432/esp32-obd2?sslmode=disable
+      MQTT_BROKER_URL: tcp://mosquitto:1883
+      MQTT_USERNAME: esp32_device
+      MQTT_PASSWORD: obd_dev_mqtt
+      MQTT_CLIENT_ID: obd-api
+      HTTP_ADDR: :8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
 
-  # dashboard:
-  #   build:
-  #     context: ./dashboard
-  #     dockerfile: Dockerfile
-  #     args:
-  #       API_BASE_URL: http://api:8080
-  #   container_name: obd-dashboard
-  #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     API_BASE_URL: http://api:8080
-  #   depends_on:
-  #     - api
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      API_URL: http://api:8080/api
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
