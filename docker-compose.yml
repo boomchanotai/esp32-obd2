@@ -5,8 +5,7 @@ services:
       - "1883:1883"
     volumes:
       - ./mosquitto/config:/mosquitto/config:ro
-      - ./mosquitto/data:/mosquitto/data
-      - ./mosquitto/log:/mosquitto/log
+      - mosquitto_data:/mosquitto/data
     healthcheck:
       test:
         [
@@ -64,3 +63,4 @@ services:
 
 volumes:
   postgres_data:
+  mosquitto_data:

@@ -9,10 +9,10 @@
 #include <ArduinoJson.h>
 
 #ifndef WIFI_SSID
-#define WIFI_SSID "your-wifi-ssid"
+#define WIFI_SSID "Centos"
 #endif
 #ifndef WIFI_PASS
-#define WIFI_PASS "your-wifi-password"
+#define WIFI_PASS "password"
 #endif
 #ifndef MQTT_HOST
 #define MQTT_HOST "192.168.1.10"
