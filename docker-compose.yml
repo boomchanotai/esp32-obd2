@@ -37,9 +37,7 @@ services:
       start_period: 15s
 
   api:
-    build:
-      context: ./api
-      dockerfile: Dockerfile
+    image: ghcr.io/boomchanotai/esp32-obd2/api:latest
     ports:
       - "8080:8080"
     environment:
@@ -56,9 +54,7 @@ services:
         condition: service_healthy
 
   dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
+    image: ghcr.io/boomchanotai/esp32-obd2/dashboard:latest
     ports:
       - "3000:3000"
     environment:
