@@ -59,17 +59,17 @@ export function DeviceSidebar({ devices, selectedId }: Props) {
                   variant: active ? "secondary" : "ghost",
                   size: "sm",
                 }),
-                "h-auto w-full flex-col items-start gap-0.5 py-2.5",
+                "h-auto w-full min-w-0 flex-col items-start gap-0.5 py-2.5",
               )}
             >
-              <span className="font-medium">{label}</span>
+              <span className="w-full truncate text-left font-medium">{label}</span>
               {d.vehicle_name ? (
-                <span className="text-xs font-normal text-muted-foreground">
+                <span className="w-full truncate text-left text-xs font-normal text-muted-foreground">
                   {d.vehicle_name}
                 </span>
               ) : null}
               {d.vehicle_plate ? (
-                <span className="font-mono text-[11px] font-normal text-muted-foreground">
+                <span className="w-full truncate text-left font-mono text-[11px] font-normal text-muted-foreground">
                   {d.vehicle_plate}
                 </span>
               ) : null}

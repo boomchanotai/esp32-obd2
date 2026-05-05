@@ -46,12 +46,12 @@ export default async function DashboardPage({
           {selectedId ? (
             <>
               {current ? (
-                <p className="text-sm text-muted-foreground">
+                <p className="min-w-0 text-sm text-muted-foreground">
                   <span className="font-medium text-foreground">
                     {current.name || current.device_code}
                   </span>
                   {current.id ? (
-                    <span className="ml-2 font-mono text-xs">
+                    <span className="ml-2 block break-all font-mono text-xs sm:inline">
                       {current.id}
                     </span>
                   ) : null}

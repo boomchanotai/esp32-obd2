@@ -38,7 +38,8 @@ export function TripsTable({ trips }: Props) {
             No trips recorded.
           </p>
         ) : (
-          <Table>
+          <div className="w-full overflow-x-auto">
+            <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Started</TableHead>
@@ -67,7 +68,8 @@ export function TripsTable({ trips }: Props) {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+            </Table>
+          </div>
         )}
       </CardContent>
     </Card>

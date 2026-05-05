@@ -29,7 +29,8 @@ export function TelemetryTable({ rows }: Props) {
         {list.length === 0 ? (
           <p className="px-4 text-sm text-muted-foreground sm:px-0">No rows yet.</p>
         ) : (
-          <Table>
+          <div className="w-full overflow-x-auto">
+            <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Time</TableHead>
@@ -62,7 +63,8 @@ export function TelemetryTable({ rows }: Props) {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+            </Table>
+          </div>
         )}
       </CardContent>
     </Card>

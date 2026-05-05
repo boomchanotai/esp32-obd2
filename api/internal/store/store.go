@@ -26,6 +26,27 @@ func New(pool *pgxpool.Pool) *Store {
 
 func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 
+func normalizeEventTime(raw string, now time.Time) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return now.UTC()
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return now.UTC()
+	}
+	t = t.UTC()
+
+	// Protect against bad device clocks (e.g. 1970 fallback) and extreme skew.
+	if t.Year() < 2020 {
+		return now.UTC()
+	}
+	if t.Before(now.Add(-24 * time.Hour)) || t.After(now.Add(5*time.Minute)) {
+		return now.UTC()
+	}
+	return t
+}
+
 func (s *Store) DeviceIDByCode(ctx context.Context, code string) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := s.pool.QueryRow(ctx, `SELECT id FROM devices WHERE device_code = $1`, code).Scan(&id)
@@ -35,23 +56,32 @@ func (s *Store) DeviceIDByCode(ctx context.Context, code string) (uuid.UUID, err
 	return id, err
 }
 
+func (s *Store) EnsureDeviceIDByCode(ctx context.Context, code string) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO devices (device_code, name)
+		VALUES ($1, $2)
+		ON CONFLICT (device_code) DO UPDATE
+		SET updated_at = now()
+		RETURNING id
+	`, code, "Auto-registered device").Scan(&id)
+	return id, err
+}
+
 func (s *Store) IngestTelemetry(ctx context.Context, topicDevice string, p *models.TelemetryPayload, raw []byte) error {
-	if p.DeviceID == "" || p.Timestamp == "" {
-		return errors.New("missing device_id or timestamp")
+	if p.DeviceID == "" {
+		return errors.New("missing device_id")
 	}
 	if p.DeviceID != topicDevice {
 		return errors.New("device_id does not match MQTT topic")
 	}
 
-	deviceID, err := s.DeviceIDByCode(ctx, topicDevice)
+	deviceID, err := s.EnsureDeviceIDByCode(ctx, topicDevice)
 	if err != nil {
 		return err
 	}
 
-	recordedAt, err := time.Parse(time.RFC3339, p.Timestamp)
-	if err != nil {
-		return err
-	}
+	recordedAt := normalizeEventTime(p.Timestamp, time.Now())
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -107,24 +137,44 @@ func (s *Store) finalizeTripInTx(ctx context.Context, tx pgx.Tx, deviceID, tripI
 	return err
 }
 
+// inferTripEndWhenNewStart closes an existing open trip at the latest telemetry timestamp
+// before the new start event (if available), otherwise falls back to newStartAt.
+func (s *Store) inferTripEndWhenNewStart(ctx context.Context, tx pgx.Tx, deviceID, tripID uuid.UUID, newStartAt time.Time) (time.Time, error) {
+	var startedAt time.Time
+	if err := tx.QueryRow(ctx, `SELECT started_at FROM trips WHERE id = $1 AND device_id = $2`, tripID, deviceID).Scan(&startedAt); err != nil {
+		return time.Time{}, err
+	}
+
+	var lastTelemetryAt *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT MAX(recorded_at)
+		FROM telemetry
+		WHERE device_id = $1 AND recorded_at >= $2 AND recorded_at <= $3
+	`, deviceID, startedAt, newStartAt).Scan(&lastTelemetryAt); err != nil {
+		return time.Time{}, err
+	}
+
+	if lastTelemetryAt != nil && !lastTelemetryAt.IsZero() {
+		return *lastTelemetryAt, nil
+	}
+	return newStartAt, nil
+}
+
 // IngestTripSession records trip boundaries from device MQTT messages (OBD session start/end).
 func (s *Store) IngestTripSession(ctx context.Context, topicDevice string, p *models.TripSessionPayload) error {
-	if p.DeviceID == "" || p.Timestamp == "" || p.Action == "" {
-		return errors.New("missing device_id, timestamp, or action")
+	if p.DeviceID == "" || p.Action == "" {
+		return errors.New("missing device_id or action")
 	}
 	if p.DeviceID != topicDevice {
 		return errors.New("device_id does not match MQTT topic")
 	}
 
-	deviceID, err := s.DeviceIDByCode(ctx, topicDevice)
+	deviceID, err := s.EnsureDeviceIDByCode(ctx, topicDevice)
 	if err != nil {
 		return err
 	}
 
-	ts, err := time.Parse(time.RFC3339, p.Timestamp)
-	if err != nil {
-		return err
-	}
+	ts := normalizeEventTime(p.Timestamp, time.Now())
 
 	action := strings.ToLower(strings.TrimSpace(p.Action))
 	if action != "start" && action != "end" {
@@ -146,7 +196,11 @@ func (s *Store) IngestTripSession(ctx context.Context, topicDevice string, p *mo
 			LIMIT 1
 		`, deviceID).Scan(&openID)
 		if err == nil {
-			if err := s.finalizeTripInTx(ctx, tx, deviceID, openID, ts); err != nil {
+			endAt, inferErr := s.inferTripEndWhenNewStart(ctx, tx, deviceID, openID, ts)
+			if inferErr != nil {
+				return inferErr
+			}
+			if err := s.finalizeTripInTx(ctx, tx, deviceID, openID, endAt); err != nil {
 				return err
 			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
