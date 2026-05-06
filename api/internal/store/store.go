@@ -92,11 +92,15 @@ func (s *Store) IngestTelemetry(ctx context.Context, topicDevice string, p *mode
 	err = tx.QueryRow(ctx, `
 		INSERT INTO telemetry (
 			device_id, recorded_at, rpm, speed, coolant_temp, throttle, engine_load,
-			battery_voltage, mil_status, dtc_count, latitude, longitude, raw
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			battery_voltage, engine_oil_temp, ambient_air_temp, intake_map_kpa, maf_air_flow_rate,
+			timing_advance, engine_runtime_sec, fuel_tank_level, engine_fuel_rate, fuel_type,
+			hybrid_battery_remaining_life, mil_status, dtc_count, latitude, longitude, raw
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 		RETURNING id
 	`, deviceID, recordedAt, p.RPM, p.Speed, p.CoolantTemp, p.Throttle, p.EngineLoad,
-		p.BatteryVoltage, p.MILStatus, p.DTCCount, p.Latitude, p.Longitude, raw,
+		p.BatteryVoltage, p.EngineOilTemp, p.AmbientAirTemp, p.IntakeMapKpa, p.MafAirFlowRate,
+		p.TimingAdvance, p.EngineRuntimeSec, p.FuelTankLevel, p.EngineFuelRate, p.FuelType,
+		p.HybridBatteryRemainingLife, p.MILStatus, p.DTCCount, p.Latitude, p.Longitude, raw,
 	).Scan(&telID)
 	if err != nil {
 		return err
@@ -268,7 +272,9 @@ func (s *Store) ListTelemetry(ctx context.Context, deviceID uuid.UUID, limit int
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, recorded_at, rpm, speed, coolant_temp, throttle, engine_load,
-		       battery_voltage, mil_status, dtc_count, latitude, longitude
+		       battery_voltage, engine_oil_temp, ambient_air_temp, intake_map_kpa, maf_air_flow_rate,
+		       timing_advance, engine_runtime_sec, fuel_tank_level, engine_fuel_rate, fuel_type,
+		       hybrid_battery_remaining_life, mil_status, dtc_count, latitude, longitude
 		FROM telemetry WHERE device_id = $1 ORDER BY recorded_at DESC LIMIT $2
 	`, deviceID, limit)
 	if err != nil {
@@ -279,7 +285,9 @@ func (s *Store) ListTelemetry(ctx context.Context, deviceID uuid.UUID, limit int
 	for rows.Next() {
 		var t models.TelemetryRow
 		if err := rows.Scan(&t.ID, &t.RecordedAt, &t.RPM, &t.Speed, &t.CoolantTemp, &t.Throttle, &t.EngineLoad,
-			&t.BatteryVoltage, &t.MILStatus, &t.DTCCount, &t.Latitude, &t.Longitude); err != nil {
+			&t.BatteryVoltage, &t.EngineOilTemp, &t.AmbientAirTemp, &t.IntakeMapKpa, &t.MafAirFlowRate,
+			&t.TimingAdvance, &t.EngineRuntimeSec, &t.FuelTankLevel, &t.EngineFuelRate, &t.FuelType,
+			&t.HybridBatteryRemainingLife, &t.MILStatus, &t.DTCCount, &t.Latitude, &t.Longitude); err != nil {
 			return nil, err
 		}
 		out = append(out, t)

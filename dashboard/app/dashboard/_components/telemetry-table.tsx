@@ -38,6 +38,10 @@ export function TelemetryTable({ rows }: Props) {
                 <TableHead className="text-right">Speed</TableHead>
                 <TableHead className="hidden text-right sm:table-cell">°C</TableHead>
                 <TableHead className="hidden text-right md:table-cell">V</TableHead>
+                <TableHead className="hidden text-right lg:table-cell">Oil °C</TableHead>
+                <TableHead className="hidden text-right lg:table-cell">MAP</TableHead>
+                <TableHead className="hidden text-right xl:table-cell">MAF</TableHead>
+                <TableHead className="hidden text-right xl:table-cell">Fuel %</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -59,6 +63,18 @@ export function TelemetryTable({ rows }: Props) {
                   </TableCell>
                   <TableCell className="hidden text-right font-mono text-sm md:table-cell">
                     {row.battery_voltage ?? "—"}
+                  </TableCell>
+                  <TableCell className="hidden text-right font-mono text-sm lg:table-cell">
+                    {row.engine_oil_temp ?? "—"}
+                  </TableCell>
+                  <TableCell className="hidden text-right font-mono text-sm lg:table-cell">
+                    {row.intake_map_kpa ?? "—"}
+                  </TableCell>
+                  <TableCell className="hidden text-right font-mono text-sm xl:table-cell">
+                    {row.maf_air_flow_rate ?? "—"}
+                  </TableCell>
+                  <TableCell className="hidden text-right font-mono text-sm xl:table-cell">
+                    {row.fuel_tank_level ?? "—"}
                   </TableCell>
                 </TableRow>
               ))}

@@ -50,19 +50,37 @@ components:
       type: object
     models.TelemetryRow:
       properties:
+        ambient_air_temp:
+          type: number
         battery_voltage:
           type: number
         coolant_temp:
           type: number
         dtc_count:
           type: integer
+        engine_fuel_rate:
+          type: number
         engine_load:
+          type: number
+        engine_oil_temp:
+          type: number
+        engine_runtime_sec:
+          type: number
+        fuel_tank_level:
+          type: number
+        fuel_type:
+          type: number
+        hybrid_battery_remaining_life:
           type: number
         id:
           type: integer
+        intake_map_kpa:
+          type: number
         latitude:
           type: number
         longitude:
+          type: number
+        maf_air_flow_rate:
           type: number
         mil_status:
           type: boolean
@@ -73,6 +91,8 @@ components:
         speed:
           type: number
         throttle:
+          type: number
+        timing_advance:
           type: number
       type: object
 externalDocs:

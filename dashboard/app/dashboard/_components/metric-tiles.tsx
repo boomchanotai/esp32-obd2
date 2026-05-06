@@ -49,6 +49,19 @@ export function MetricTiles({ latest }: Props) {
         <StatCard label="Battery" value={`${fmt(latest.battery_voltage, 1)} V`} />
         <StatCard label="Throttle" value={`${fmt(latest.throttle, 0)} %`} />
         <StatCard label="Load" value={`${fmt(latest.engine_load, 0)} %`} />
+        <StatCard label="Oil temp" value={`${fmt(latest.engine_oil_temp, 0)} °C`} />
+        <StatCard label="Ambient" value={`${fmt(latest.ambient_air_temp, 0)} °C`} />
+        <StatCard label="MAP" value={`${fmt(latest.intake_map_kpa, 0)} kPa`} />
+        <StatCard label="MAF" value={`${fmt(latest.maf_air_flow_rate, 1)} g/s`} />
+        <StatCard label="Timing" value={`${fmt(latest.timing_advance, 1)} deg`} />
+        <StatCard label="Run time" value={`${fmt(latest.engine_runtime_sec, 0)} s`} />
+        <StatCard label="Fuel level" value={`${fmt(latest.fuel_tank_level, 0)} %`} />
+        <StatCard label="Fuel rate" value={`${fmt(latest.engine_fuel_rate, 1)} L/h`} />
+        <StatCard label="Fuel type" value={fmt(latest.fuel_type, 0)} />
+        <StatCard
+          label="Hybrid battery"
+          value={`${fmt(latest.hybrid_battery_remaining_life, 0)} %`}
+        />
       </div>
     </div>
   );

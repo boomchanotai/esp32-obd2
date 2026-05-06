@@ -402,18 +402,28 @@ export interface components {
             vehicle_plate?: string;
         };
         "models.TelemetryRow": {
+            ambient_air_temp?: number;
             battery_voltage?: number;
             coolant_temp?: number;
             dtc_count?: number;
+            engine_fuel_rate?: number;
             engine_load?: number;
+            engine_oil_temp?: number;
+            engine_runtime_sec?: number;
+            fuel_tank_level?: number;
+            fuel_type?: number;
+            hybrid_battery_remaining_life?: number;
             id?: number;
+            intake_map_kpa?: number;
             latitude?: number;
             longitude?: number;
+            maf_air_flow_rate?: number;
             mil_status?: boolean;
             recorded_at?: string;
             rpm?: number;
             speed?: number;
             throttle?: number;
+            timing_advance?: number;
         };
     };
     responses: never;

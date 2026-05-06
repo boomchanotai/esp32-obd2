@@ -153,7 +153,30 @@ void tripEventTimestamp(char* ts, size_t cap) {
   ts[0] = '\0';
 }
 
-void fillTelemetryJson(JsonDocument& doc, float rpm, float speed, float coolant, float throttle, float load, float vbat) {
+float readPidIfSupported(uint8_t pid) {
+  if (!OBD2.pidSupported(pid)) return NAN;
+  return OBD2.pidRead(pid);
+}
+
+void fillTelemetryJson(
+  JsonDocument& doc,
+  float rpm,
+  float speed,
+  float coolant,
+  float throttle,
+  float load,
+  float vbat,
+  float oilTemp,
+  float ambientTemp,
+  float mapKpa,
+  float maf,
+  float timingAdvance,
+  float runtimeSec,
+  float fuelLevel,
+  float fuelRate,
+  float fuelType,
+  float hybridBatteryPct
+) {
   char ts[40];
   tripEventTimestamp(ts, sizeof(ts));
 
@@ -168,6 +191,17 @@ void fillTelemetryJson(JsonDocument& doc, float rpm, float speed, float coolant,
   doc["throttle"] = isnan(throttle) ? 0.0 : (double)throttle;
   doc["engine_load"] = isnan(load) ? 0.0 : (double)load;
   doc["battery_voltage"] = isnan(vbat) ? 0.0 : (double)vbat;
+  doc["engine_oil_temp"] = isnan(oilTemp) ? 0.0 : (double)oilTemp;
+  doc["ambient_air_temp"] = isnan(ambientTemp) ? 0.0 : (double)ambientTemp;
+  doc["intake_map_kpa"] = isnan(mapKpa) ? 0.0 : (double)mapKpa;
+  doc["maf_air_flow_rate"] = isnan(maf) ? 0.0 : (double)maf;
+  doc["timing_advance"] = isnan(timingAdvance) ? 0.0 : (double)timingAdvance;
+  doc["engine_runtime_sec"] = isnan(runtimeSec) ? 0.0 : (double)runtimeSec;
+  doc["fuel_tank_level"] = isnan(fuelLevel) ? 0.0 : (double)fuelLevel;
+  doc["engine_fuel_rate"] = isnan(fuelRate) ? 0.0 : (double)fuelRate;
+  doc["fuel_type"] = isnan(fuelType) ? 0.0 : (double)fuelType;
+  doc["hybrid_battery_remaining_life"] =
+    isnan(hybridBatteryPct) ? 0.0 : (double)hybridBatteryPct;
   doc["mil_status"] = false;
   doc["dtc_count"] = 0;
 }
@@ -215,11 +249,39 @@ void loop() {
   float throttle = OBD2.pidRead(THROTTLE_POSITION);
   float load = OBD2.pidRead(CALCULATED_ENGINE_LOAD);
   float vbat = OBD2.pidRead(CONTROL_MODULE_VOLTAGE);
+  float oilTemp = readPidIfSupported(ENGINE_OIL_TEMPERATURE);
+  float ambientTemp = readPidIfSupported(AMBIENT_AIR_TEMPERATURE);
+  float mapKpa = readPidIfSupported(INTAKE_MANIFOLD_ABSOLUTE_PRESSURE);
+  float maf = readPidIfSupported(MAF_AIR_FLOW_RATE);
+  float timingAdvance = readPidIfSupported(TIMING_ADVANCE);
+  float runtimeSec = readPidIfSupported(RUN_TIME_SINCE_ENGINE_START);
+  float fuelLevel = readPidIfSupported(FUEL_TANK_LEVEL_INPUT);
+  float fuelRate = readPidIfSupported(ENGINE_FUEL_RATE);
+  float fuelType = readPidIfSupported(FUEL_TYPE);
+  float hybridBatteryPct = readPidIfSupported(HYBRID_BATTERY_PACK_REMAINING_LIFE);
 
   JsonDocument doc;
-  fillTelemetryJson(doc, rpm, speed, coolant, throttle, load, vbat);
+  fillTelemetryJson(
+    doc,
+    rpm,
+    speed,
+    coolant,
+    throttle,
+    load,
+    vbat,
+    oilTemp,
+    ambientTemp,
+    mapKpa,
+    maf,
+    timingAdvance,
+    runtimeSec,
+    fuelLevel,
+    fuelRate,
+    fuelType,
+    hybridBatteryPct
+  );
 
-  char buf[384];
+  char buf[768];
   size_t n = serializeJson(doc, buf, sizeof(buf));
   if (mqtt.publish(topic, (const uint8_t*)buf, n, false)) {
     Serial.printf("Published %u bytes -> %s\n", (unsigned)n, topic);
