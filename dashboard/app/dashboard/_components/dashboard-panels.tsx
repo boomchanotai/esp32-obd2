@@ -40,7 +40,7 @@ type Props = { deviceId: string };
 export async function DashboardPanels({ deviceId }: Props) {
   const [latest, telemetry, trips, alerts] = await Promise.all([
     getLatestTelemetry(deviceId).catch(() => null),
-    listTelemetry(deviceId, 60).catch(() => []),
+    listTelemetry(deviceId, 360).catch(() => []),
     listDeviceTrips(deviceId, 12).catch(() => []),
     listDeviceAlerts(deviceId, 15).catch(() => []),
   ]);
@@ -58,8 +58,8 @@ export async function DashboardPanels({ deviceId }: Props) {
         <CardHeader>
           <CardTitle>RPM & speed</CardTitle>
           <CardDescription>
-            Trend from the last {telemetryRows.length} telemetry samples (time
-            vs engine speed and vehicle speed).
+            Trend from the last {telemetryRows.length} telemetry samples
+            (roughly 30 minutes at 5-second publish interval).
           </CardDescription>
         </CardHeader>
         <CardContent>
