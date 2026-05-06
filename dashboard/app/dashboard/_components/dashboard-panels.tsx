@@ -52,7 +52,7 @@ export async function DashboardPanels({ deviceId }: Props) {
   const chartPoints = rowsToChartPoints(telemetryRows);
 
   return (
-    <div className="flex min-w-0 flex-col gap-6">
+    <div className="flex min-w-0 flex-col gap-4 sm:gap-6">
       <MetricTiles latest={latest} />
       <Card>
         <CardHeader>
@@ -66,7 +66,7 @@ export async function DashboardPanels({ deviceId }: Props) {
           <TelemetryChart points={chartPoints} />
         </CardContent>
       </Card>
-      <div className="grid gap-6 xl:grid-cols-2">
+      <div className="grid gap-4 sm:gap-6 xl:grid-cols-2">
         <TelemetryTable rows={telemetryRows} />
         <div className="flex flex-col gap-6">
           <TripsTable trips={tripRows} />

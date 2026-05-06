@@ -41,7 +41,7 @@ export function TelemetryChart({ points }: Props) {
   }
 
   return (
-    <ChartContainer config={chartConfig} className="aspect-auto h-[300px] w-full">
+    <ChartContainer config={chartConfig} className="aspect-auto h-[220px] w-full sm:h-[300px]">
       <LineChart
         accessibilityLayer
         data={series}

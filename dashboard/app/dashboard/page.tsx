@@ -29,7 +29,7 @@ export default async function DashboardPage({
   const current = devices.find((d) => d.id === selectedId);
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8 p-4 pb-12 sm:p-6">
+    <div className="mx-auto max-w-7xl space-y-6 p-3 pb-10 sm:space-y-8 sm:p-6 sm:pb-12">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">
           Dashboard
@@ -40,7 +40,7 @@ export default async function DashboardPage({
         </p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(240px,280px)_1fr] lg:items-start">
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-[minmax(240px,280px)_1fr] lg:items-start">
         <DeviceSidebar devices={devices} selectedId={selectedId} />
         <div className="min-w-0 space-y-4">
           {selectedId ? (

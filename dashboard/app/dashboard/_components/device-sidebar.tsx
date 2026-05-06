@@ -45,7 +45,7 @@ export function DeviceSidebar({ devices, selectedId }: Props) {
         <CardTitle>Devices</CardTitle>
         <CardDescription>Select a unit to view telemetry and history.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-1">
+      <CardContent className="flex gap-2 overflow-x-auto pb-1 sm:block sm:space-y-1 sm:overflow-visible sm:pb-0">
         {list.map((d) => {
           const id = d.id ?? "";
           const active = selectedId === id;
@@ -59,7 +59,7 @@ export function DeviceSidebar({ devices, selectedId }: Props) {
                   variant: active ? "secondary" : "ghost",
                   size: "sm",
                 }),
-                "h-auto w-full min-w-0 flex-col items-start gap-0.5 py-2.5",
+                "h-auto min-w-44 shrink-0 flex-col items-start gap-0.5 py-2.5 sm:w-full sm:min-w-0",
               )}
             >
               <span className="w-full truncate text-left font-medium">{label}</span>
