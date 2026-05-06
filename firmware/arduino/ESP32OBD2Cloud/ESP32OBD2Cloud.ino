@@ -44,8 +44,10 @@ char topic[64];
 char s_device_code[48];
 bool s_time_ok = false;
 bool s_obd_connected = false;
-bool s_prev_obd_connected = false;
 bool s_identity_locked = false;
+bool s_trip_active = false;
+uint8_t s_engine_on_streak = 0;
+uint8_t s_engine_off_streak = 0;
 uint8_t s_obd_fail_streak = 0;
 uint32_t s_last_obd_connect_try = 0;
 uint32_t s_last_obd_verify = 0;
@@ -143,8 +145,7 @@ void maybeResolveIdentityFromObd() {
   }
 
   // If VIN is unavailable, use manual ECU_NAME or ECU-reported name.
-  String ecu = (ECU_NAME != nullptr && ECU_NAME[0] != '\0') ? String(ECU_NAME)
-                                                             : OBD2.ecuNameRead();
+  String ecu = (ECU_NAME != nullptr && ECU_NAME[0] != '\0') ? String(ECU_NAME) : OBD2.ecuNameRead();
   if (!isEmptyOrUnknown(ecu)) {
     sanitizeDeviceCode(ecu.c_str(), s_device_code, sizeof(s_device_code));
     if (s_device_code[0] != '\0') {
@@ -234,7 +235,39 @@ bool publishTripSession(const char* action) {
   return false;
 }
 
-void fillTelemetryJson(JsonDocument& doc) {
+bool engineIsRunning(float rpm, float speed, float vbat) {
+  if (!isnan(rpm) && rpm > 500) return true;
+  if (!isnan(speed) && speed > 2) return true;
+  if (!isnan(vbat) && vbat > 13.0) return true;
+  return false;
+}
+
+void updateTripStateFromEngine(float rpm, float speed, float vbat) {
+  bool running = engineIsRunning(rpm, speed, vbat);
+  if (running) {
+    s_engine_on_streak = (s_engine_on_streak < 255) ? s_engine_on_streak + 1 : 255;
+    s_engine_off_streak = 0;
+    if (!s_trip_active && s_engine_on_streak >= 2) {
+      if (publishTripSession("start")) {
+        s_trip_active = true;
+        Serial.println("Trip started (engine running)");
+      }
+    }
+    return;
+  }
+
+  s_engine_off_streak = (s_engine_off_streak < 255) ? s_engine_off_streak + 1 : 255;
+  s_engine_on_streak = 0;
+  // 12 samples * 5s publish interval ~= 60s stable stop before ending trip.
+  if (s_trip_active && s_engine_off_streak >= 12) {
+    if (publishTripSession("end")) {
+      s_trip_active = false;
+      Serial.println("Trip ended (engine stopped)");
+    }
+  }
+}
+
+void fillTelemetryJson(JsonDocument& doc, float rpm, float speed, float coolant, float throttle, float load, float vbat) {
   char ts[40];
   tripEventTimestamp(ts, sizeof(ts));
 
@@ -242,13 +275,6 @@ void fillTelemetryJson(JsonDocument& doc) {
   if (ts[0] != '\0') {
     doc["timestamp"] = ts;
   }
-
-  float rpm = OBD2.pidRead(ENGINE_RPM);
-  float speed = OBD2.pidRead(VEHICLE_SPEED);
-  float coolant = OBD2.pidRead(ENGINE_COOLANT_TEMPERATURE);
-  float throttle = OBD2.pidRead(THROTTLE_POSITION);
-  float load = OBD2.pidRead(CALCULATED_ENGINE_LOAD);
-  float vbat = OBD2.pidRead(CONTROL_MODULE_VOLTAGE);
 
   doc["rpm"] = isnan(rpm) ? 0 : (int)rpm;
   doc["speed"] = isnan(speed) ? 0.0 : (double)speed;
@@ -287,15 +313,6 @@ void loop() {
   serviceObdConnection();
   maybeResolveIdentityFromObd();
 
-  bool obd = s_obd_connected;
-  if (obd && !s_prev_obd_connected) {
-    if (publishTripSession("start")) s_prev_obd_connected = true;
-  } else if (!obd && s_prev_obd_connected) {
-    if (publishTripSession("end")) s_prev_obd_connected = false;
-  } else {
-    s_prev_obd_connected = obd;
-  }
-
   static uint32_t lastPublish = 0;
   uint32_t now = millis();
   if (now - lastPublish < kPublishMs) {
@@ -304,11 +321,28 @@ void loop() {
   lastPublish = now;
 
   if (!s_obd_connected) {
+    s_engine_on_streak = 0;
+    s_engine_off_streak = 0;
+    if (s_trip_active) {
+      if (publishTripSession("end")) {
+        s_trip_active = false;
+        Serial.println("Trip ended (OBD disconnected)");
+      }
+    }
     return;
   }
 
+  float rpm = OBD2.pidRead(ENGINE_RPM);
+  float speed = OBD2.pidRead(VEHICLE_SPEED);
+  float coolant = OBD2.pidRead(ENGINE_COOLANT_TEMPERATURE);
+  float throttle = OBD2.pidRead(THROTTLE_POSITION);
+  float load = OBD2.pidRead(CALCULATED_ENGINE_LOAD);
+  float vbat = OBD2.pidRead(CONTROL_MODULE_VOLTAGE);
+
+  updateTripStateFromEngine(rpm, speed, vbat);
+
   JsonDocument doc;
-  fillTelemetryJson(doc);
+  fillTelemetryJson(doc, rpm, speed, coolant, throttle, load, vbat);
 
   char buf[384];
   size_t n = serializeJson(doc, buf, sizeof(buf));
