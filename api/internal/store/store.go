@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -111,128 +110,6 @@ func (s *Store) IngestTelemetry(ctx context.Context, topicDevice string, p *mode
 }
 
 // finalizeTripInTx sets ended_at, duration, and speed aggregates for a trip row.
-func (s *Store) finalizeTripInTx(ctx context.Context, tx pgx.Tx, deviceID, tripID uuid.UUID, endedAt time.Time) error {
-	var startedAt time.Time
-	if err := tx.QueryRow(ctx, `SELECT started_at FROM trips WHERE id = $1 AND device_id = $2`, tripID, deviceID).Scan(&startedAt); err != nil {
-		return err
-	}
-	var avgSpeed, maxSpeed float64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(AVG(speed), 0)::float8, COALESCE(MAX(speed), 0)::float8
-		FROM telemetry
-		WHERE device_id = $1 AND recorded_at >= $2 AND recorded_at <= $3
-	`, deviceID, startedAt, endedAt).Scan(&avgSpeed, &maxSpeed); err != nil {
-		return err
-	}
-	dur := int(endedAt.Sub(startedAt).Seconds())
-	_, err := tx.Exec(ctx, `
-		UPDATE trips SET
-			ended_at = $2,
-			duration_seconds = $3,
-			avg_speed = $4,
-			max_speed = $5,
-			updated_at = now()
-		WHERE id = $1
-	`, tripID, endedAt, dur, &avgSpeed, &maxSpeed)
-	return err
-}
-
-// inferTripEndWhenNewStart closes an existing open trip at the latest telemetry timestamp
-// before the new start event (if available), otherwise falls back to newStartAt.
-func (s *Store) inferTripEndWhenNewStart(ctx context.Context, tx pgx.Tx, deviceID, tripID uuid.UUID, newStartAt time.Time) (time.Time, error) {
-	var startedAt time.Time
-	if err := tx.QueryRow(ctx, `SELECT started_at FROM trips WHERE id = $1 AND device_id = $2`, tripID, deviceID).Scan(&startedAt); err != nil {
-		return time.Time{}, err
-	}
-
-	var lastTelemetryAt *time.Time
-	if err := tx.QueryRow(ctx, `
-		SELECT MAX(recorded_at)
-		FROM telemetry
-		WHERE device_id = $1 AND recorded_at >= $2 AND recorded_at <= $3
-	`, deviceID, startedAt, newStartAt).Scan(&lastTelemetryAt); err != nil {
-		return time.Time{}, err
-	}
-
-	if lastTelemetryAt != nil && !lastTelemetryAt.IsZero() {
-		return *lastTelemetryAt, nil
-	}
-	return newStartAt, nil
-}
-
-// IngestTripSession records trip boundaries from device MQTT messages (OBD session start/end).
-func (s *Store) IngestTripSession(ctx context.Context, topicDevice string, p *models.TripSessionPayload) error {
-	if p.DeviceID == "" || p.Action == "" {
-		return errors.New("missing device_id or action")
-	}
-	if p.DeviceID != topicDevice {
-		return errors.New("device_id does not match MQTT topic")
-	}
-
-	deviceID, err := s.EnsureDeviceIDByCode(ctx, topicDevice)
-	if err != nil {
-		return err
-	}
-
-	ts := normalizeEventTime(p.Timestamp, time.Now())
-
-	action := strings.ToLower(strings.TrimSpace(p.Action))
-	if action != "start" && action != "end" {
-		return fmt.Errorf("invalid trip action %q (expected start or end)", p.Action)
-	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	if action == "start" {
-		var openID uuid.UUID
-		err = tx.QueryRow(ctx, `
-			SELECT id FROM trips
-			WHERE device_id = $1 AND ended_at IS NULL
-			ORDER BY started_at DESC
-			LIMIT 1
-		`, deviceID).Scan(&openID)
-		if err == nil {
-			endAt, inferErr := s.inferTripEndWhenNewStart(ctx, tx, deviceID, openID, ts)
-			if inferErr != nil {
-				return inferErr
-			}
-			if err := s.finalizeTripInTx(ctx, tx, deviceID, openID, endAt); err != nil {
-				return err
-			}
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-
-		_, err = tx.Exec(ctx, `INSERT INTO trips (device_id, started_at) VALUES ($1, $2)`, deviceID, ts)
-		if err != nil {
-			return err
-		}
-		return tx.Commit(ctx)
-	}
-
-	var openID uuid.UUID
-	err = tx.QueryRow(ctx, `
-		SELECT id FROM trips
-		WHERE device_id = $1 AND ended_at IS NULL
-		ORDER BY started_at DESC
-		LIMIT 1
-	`, deviceID).Scan(&openID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return tx.Commit(ctx)
-	}
-	if err != nil {
-		return err
-	}
-	if err := s.finalizeTripInTx(ctx, tx, deviceID, openID, ts); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
 func engineRunning(rpm *int, speed *float64) bool {
 	if rpm != nil && *rpm > 400 {
 		return true
@@ -416,31 +293,6 @@ func (s *Store) LatestTelemetry(ctx context.Context, deviceID uuid.UUID) (*model
 		return nil, err
 	}
 	return &rows[0], nil
-}
-
-func (s *Store) ListTrips(ctx context.Context, deviceID uuid.UUID, limit int) ([]models.Trip, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
-	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, started_at, ended_at, duration_seconds, avg_speed, max_speed
-		FROM trips WHERE device_id = $1 ORDER BY started_at DESC LIMIT $2
-	`, deviceID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []models.Trip
-	for rows.Next() {
-		var tid uuid.UUID
-		var t models.Trip
-		if err := rows.Scan(&tid, &t.StartedAt, &t.EndedAt, &t.DurationSeconds, &t.AvgSpeed, &t.MaxSpeed); err != nil {
-			return nil, err
-		}
-		t.ID = tid.String()
-		out = append(out, t)
-	}
-	return out, rows.Err()
 }
 
 func (s *Store) ListAlerts(ctx context.Context, deviceID uuid.UUID, limit int) ([]models.Alert, error) {

@@ -371,78 +371,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/devices/{id}/trips": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List trips
-         * @description Returns up to `limit` trips (default 50, max 200), newest first.
-         */
-        get: {
-            parameters: {
-                query?: {
-                    /** @description Max rows (default 50, max 200) */
-                    limit?: number;
-                };
-                header?: never;
-                path: {
-                    /** @description Device UUID */
-                    id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["models.Trip"][];
-                    };
-                };
-                /** @description invalid id */
-                400: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": string;
-                    };
-                };
-                /** @description device not found */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": string;
-                    };
-                };
-                /** @description error message */
-                500: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": string;
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -486,14 +414,6 @@ export interface components {
             rpm?: number;
             speed?: number;
             throttle?: number;
-        };
-        "models.Trip": {
-            avg_speed?: number;
-            duration_seconds?: number;
-            ended_at?: string;
-            id?: string;
-            max_speed?: number;
-            started_at?: string;
         };
     };
     responses: never;

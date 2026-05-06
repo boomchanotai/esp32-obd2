@@ -11,4 +11,3 @@ export {
   listTelemetry,
   type TelemetryRow,
 } from "./telemetry";
-export { listDeviceTrips, type Trip } from "./trips";

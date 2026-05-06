@@ -26,7 +26,6 @@ func (h *Handlers) Routes() chi.Router {
 	r.Get("/devices/{id}", h.getDevice)
 	r.Get("/devices/{id}/telemetry", h.listTelemetry)
 	r.Get("/devices/{id}/latest", h.latestTelemetry)
-	r.Get("/devices/{id}/trips", h.listTrips)
 	r.Get("/devices/{id}/alerts", h.listAlerts)
 	return r
 }
@@ -185,38 +184,6 @@ func (h *Handlers) latestTelemetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, row)
-}
-
-// listTrips returns recent trips for a device.
-//
-//	@Summary		List trips
-//	@Description	Returns up to `limit` trips (default 50, max 200), newest first.
-//	@Tags			trips
-//	@Produce		json
-//	@Param			id		path		string	true	"Device UUID"
-//	@Param			limit	query		int		false	"Max rows (default 50, max 200)"
-//	@Success		200		{array}		models.Trip
-//	@Failure		400		{string}	string	"invalid id"
-//	@Failure		404		{string}	string	"device not found"
-//	@Failure		500		{string}	string	"error message"
-//	@Router			/devices/{id}/trips [get]
-func (h *Handlers) listTrips(w http.ResponseWriter, r *http.Request) {
-	id, err := parseDeviceID(chi.URLParam(r, "id"))
-	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
-		return
-	}
-	if d, _ := h.store.GetDevice(r.Context(), id); d == nil {
-		http.NotFound(w, r)
-		return
-	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	rows, err := h.store.ListTrips(r.Context(), id, limit)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, rows)
 }
 
 // listAlerts returns recent alerts for a device.

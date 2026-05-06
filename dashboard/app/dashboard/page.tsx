@@ -35,8 +35,8 @@ export default async function DashboardPage({
           Dashboard
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Choose a device to view live telemetry, RPM/speed trend, trip history,
-          and alerts. Panels refresh every few seconds while you stay on this page.
+          Choose a device to view live telemetry, RPM/speed trend, and alerts.
+          Panels refresh every few seconds while you stay on this page.
         </p>
       </div>
 

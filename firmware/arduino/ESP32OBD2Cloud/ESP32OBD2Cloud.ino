@@ -24,12 +24,8 @@ static const char* MQTT_HOST = "localhost";
 static const uint16_t MQTT_PORT = 1883;
 static const char* MQTT_USER = "esp32_device";
 static const char* MQTT_PASS = "obd_dev_mqtt";
-// Identity priority for cloud device key:
-// 1) VIN (best, unique per car), 2) ECU_NAME, 3) fallback DEVICE_CODE.
+// Hardcoded cloud device identity (topic + payload device_id).
 static const char* DEVICE_CODE = "obd-kicks-001";
-// Optional manual overrides (leave empty to auto-detect from OBD).
-static const char* VIN = "";
-static const char* ECU_NAME = "";
 
 // CAN (TWAI) pins — ESP-OBD2 boards often RX=27, TX=26
 static const int CAN_RX_PIN = 27;
@@ -44,10 +40,6 @@ char topic[64];
 char s_device_code[48];
 bool s_time_ok = false;
 bool s_obd_connected = false;
-bool s_identity_locked = false;
-bool s_trip_active = false;
-uint8_t s_engine_on_streak = 0;
-uint8_t s_engine_off_streak = 0;
 uint8_t s_obd_fail_streak = 0;
 uint32_t s_last_obd_connect_try = 0;
 uint32_t s_last_obd_verify = 0;
@@ -102,62 +94,10 @@ void sanitizeDeviceCode(const char* src, char* dst, size_t cap) {
 }
 
 void resolveDeviceCode() {
-  const char* preferred = DEVICE_CODE;
-  if (VIN != nullptr && VIN[0] != '\0') {
-    preferred = VIN;
-  } else if (ECU_NAME != nullptr && ECU_NAME[0] != '\0') {
-    preferred = ECU_NAME;
-  }
-  sanitizeDeviceCode(preferred, s_device_code, sizeof(s_device_code));
+  sanitizeDeviceCode(DEVICE_CODE, s_device_code, sizeof(s_device_code));
   if (s_device_code[0] == '\0') {
     sanitizeDeviceCode(DEVICE_CODE, s_device_code, sizeof(s_device_code));
   }
-}
-
-bool isEmptyOrUnknown(const String& s) {
-  String t = s;
-  t.trim();
-  if (t.length() == 0) return true;
-  String lower = t;
-  lower.toLowerCase();
-  return lower == "unknown" || lower == "n/a" || lower == "null";
-}
-
-void maybeResolveIdentityFromObd() {
-  if (!s_obd_connected || s_identity_locked) return;
-
-  // Respect explicit manual VIN first.
-  if (VIN != nullptr && VIN[0] != '\0') {
-    resolveDeviceCode();
-    s_identity_locked = true;
-    return;
-  }
-
-  String vin = OBD2.vinRead();
-  if (!isEmptyOrUnknown(vin)) {
-    sanitizeDeviceCode(vin.c_str(), s_device_code, sizeof(s_device_code));
-    if (s_device_code[0] != '\0') {
-      s_identity_locked = true;
-      snprintf(topic, sizeof(topic), "obd2/%s/telemetry", s_device_code);
-      Serial.printf("Device identity (VIN): %s\n", s_device_code);
-      return;
-    }
-  }
-
-  // If VIN is unavailable, use manual ECU_NAME or ECU-reported name.
-  String ecu = (ECU_NAME != nullptr && ECU_NAME[0] != '\0') ? String(ECU_NAME) : OBD2.ecuNameRead();
-  if (!isEmptyOrUnknown(ecu)) {
-    sanitizeDeviceCode(ecu.c_str(), s_device_code, sizeof(s_device_code));
-    if (s_device_code[0] != '\0') {
-      s_identity_locked = true;
-      snprintf(topic, sizeof(topic), "obd2/%s/telemetry", s_device_code);
-      Serial.printf("Device identity (ECU): %s\n", s_device_code);
-      return;
-    }
-  }
-
-  // Keep fallback until readable OBD identity becomes available.
-  resolveDeviceCode();
 }
 
 void serviceObdConnection() {
@@ -213,60 +153,6 @@ void tripEventTimestamp(char* ts, size_t cap) {
   ts[0] = '\0';
 }
 
-bool publishTripSession(const char* action) {
-  if (!mqtt.connected()) return false;
-  char ts[40];
-  tripEventTimestamp(ts, sizeof(ts));
-  char tripTopic[64];
-  snprintf(tripTopic, sizeof(tripTopic), "obd2/%s/trip", s_device_code);
-  JsonDocument doc;
-  doc["device_id"] = s_device_code;
-  if (ts[0] != '\0') {
-    doc["timestamp"] = ts;
-  }
-  doc["action"] = action;
-  char buf[192];
-  size_t n = serializeJson(doc, buf, sizeof(buf));
-  if (mqtt.publish(tripTopic, (const uint8_t*)buf, n, false)) {
-    Serial.printf("Trip %s -> %s\n", action, tripTopic);
-    return true;
-  }
-  Serial.println("MQTT trip publish failed");
-  return false;
-}
-
-bool engineIsRunning(float rpm, float speed, float vbat) {
-  if (!isnan(rpm) && rpm > 500) return true;
-  if (!isnan(speed) && speed > 2) return true;
-  if (!isnan(vbat) && vbat > 13.0) return true;
-  return false;
-}
-
-void updateTripStateFromEngine(float rpm, float speed, float vbat) {
-  bool running = engineIsRunning(rpm, speed, vbat);
-  if (running) {
-    s_engine_on_streak = (s_engine_on_streak < 255) ? s_engine_on_streak + 1 : 255;
-    s_engine_off_streak = 0;
-    if (!s_trip_active && s_engine_on_streak >= 2) {
-      if (publishTripSession("start")) {
-        s_trip_active = true;
-        Serial.println("Trip started (engine running)");
-      }
-    }
-    return;
-  }
-
-  s_engine_off_streak = (s_engine_off_streak < 255) ? s_engine_off_streak + 1 : 255;
-  s_engine_on_streak = 0;
-  // 12 samples * 5s publish interval ~= 60s stable stop before ending trip.
-  if (s_trip_active && s_engine_off_streak >= 12) {
-    if (publishTripSession("end")) {
-      s_trip_active = false;
-      Serial.println("Trip ended (engine stopped)");
-    }
-  }
-}
-
 void fillTelemetryJson(JsonDocument& doc, float rpm, float speed, float coolant, float throttle, float load, float vbat) {
   char ts[40];
   tripEventTimestamp(ts, sizeof(ts));
@@ -311,7 +197,6 @@ void loop() {
   mqtt.loop();
 
   serviceObdConnection();
-  maybeResolveIdentityFromObd();
 
   static uint32_t lastPublish = 0;
   uint32_t now = millis();
@@ -321,14 +206,6 @@ void loop() {
   lastPublish = now;
 
   if (!s_obd_connected) {
-    s_engine_on_streak = 0;
-    s_engine_off_streak = 0;
-    if (s_trip_active) {
-      if (publishTripSession("end")) {
-        s_trip_active = false;
-        Serial.println("Trip ended (OBD disconnected)");
-      }
-    }
     return;
   }
 
@@ -338,8 +215,6 @@ void loop() {
   float throttle = OBD2.pidRead(THROTTLE_POSITION);
   float load = OBD2.pidRead(CALCULATED_ENGINE_LOAD);
   float vbat = OBD2.pidRead(CONTROL_MODULE_VOLTAGE);
-
-  updateTripStateFromEngine(rpm, speed, vbat);
 
   JsonDocument doc;
   fillTelemetryJson(doc, rpm, speed, coolant, throttle, load, vbat);

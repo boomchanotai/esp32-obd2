@@ -2,7 +2,7 @@
 //
 //	@title			ESP32 OBD2 Cloud API
 //	@version		1.0
-//	@description	REST API for OBD2 devices, telemetry, trips, and alerts.
+//	@description	REST API for OBD2 devices, telemetry, and alerts.
 //	@servers.url	/api
 //
 //go:generate go run github.com/swaggo/swag/v2/cmd/swag@v2.0.0-rc4 init --v3.1 -g main.go -o ../docs -d .,../internal/handlers,../internal/models
@@ -65,7 +65,7 @@ func main() {
 				log.Printf("mqtt subscribe: %v", err)
 				return
 			}
-			log.Println("mqtt subscribed obd2/+/telemetry, obd2/+/trip")
+			log.Println("mqtt subscribed obd2/+/telemetry")
 		})
 
 	mqttClient := mqtt.NewClient(mqttOpts)

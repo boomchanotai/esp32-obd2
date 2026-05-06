@@ -4,7 +4,6 @@ import {
   listTelemetry,
   type TelemetryRow,
 } from "@/actions/telemetry";
-import { listDeviceTrips } from "@/actions/trips";
 import {
   Card,
   CardContent,
@@ -18,7 +17,6 @@ import type { TelemetryChartPoint } from "./telemetry-chart";
 import { TelemetryChart } from "./telemetry-chart";
 import { MetricTiles } from "./metric-tiles";
 import { TelemetryTable } from "./telemetry-table";
-import { TripsTable } from "./trips-table";
 
 function rowsToChartPoints(rows: TelemetryRow[] | null | undefined): TelemetryChartPoint[] {
   return [...(rows ?? [])]
@@ -38,15 +36,13 @@ function rowsToChartPoints(rows: TelemetryRow[] | null | undefined): TelemetryCh
 type Props = { deviceId: string };
 
 export async function DashboardPanels({ deviceId }: Props) {
-  const [latest, telemetry, trips, alerts] = await Promise.all([
+  const [latest, telemetry, alerts] = await Promise.all([
     getLatestTelemetry(deviceId).catch(() => null),
     listTelemetry(deviceId, 360).catch(() => []),
-    listDeviceTrips(deviceId, 12).catch(() => []),
     listDeviceAlerts(deviceId, 15).catch(() => []),
   ]);
 
   const telemetryRows = Array.isArray(telemetry) ? telemetry : [];
-  const tripRows = Array.isArray(trips) ? trips : [];
   const alertRows = Array.isArray(alerts) ? alerts : [];
 
   const chartPoints = rowsToChartPoints(telemetryRows);
@@ -68,10 +64,7 @@ export async function DashboardPanels({ deviceId }: Props) {
       </Card>
       <div className="grid gap-4 sm:gap-6 xl:grid-cols-2">
         <TelemetryTable rows={telemetryRows} />
-        <div className="flex flex-col gap-6">
-          <TripsTable trips={tripRows} />
-          <AlertsPanel alerts={alertRows} />
-        </div>
+        <AlertsPanel alerts={alertRows} />
       </div>
     </div>
   );

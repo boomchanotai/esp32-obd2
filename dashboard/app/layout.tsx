@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "ESP32 OBD2 Dashboard",
-  description: "Telemetry, trips, and alerts from your OBD2 cloud API.",
+  description: "Telemetry and alerts from your OBD2 cloud API.",
 };
 
 export default function RootLayout({
